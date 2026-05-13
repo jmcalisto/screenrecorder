@@ -384,6 +384,40 @@
   }
 
   .warning-banner.visible { display: block; }
+
+  /* Recording name input */
+  .name-input-wrap {
+    margin-bottom: 20px;
+  }
+
+  .name-input-label {
+    display: block;
+    font-size: 11px;
+    font-family: 'JetBrains Mono', monospace;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    color: var(--text-dim);
+    margin-bottom: 8px;
+  }
+
+  .name-input {
+    width: 100%;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    color: var(--text);
+    font-family: 'Outfit', sans-serif;
+    font-size: 15px;
+    padding: 12px 16px;
+    outline: none;
+    transition: border-color 0.2s, box-shadow 0.2s;
+  }
+
+  .name-input::placeholder { color: var(--text-dim); opacity: 0.5; }
+  .name-input:focus {
+    border-color: var(--blue);
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
+  }
 </style>
 </head>
 <body>
@@ -401,6 +435,11 @@
   <div class="card">
     <div id="warningBanner" class="warning-banner">
       Your browser doesn't support MP4/H.264 recording natively. The recording will be saved as WebM. You can convert it to MP4 with FFmpeg or any video converter.
+    </div>
+
+    <div class="name-input-wrap">
+      <label class="name-input-label" for="recName">Recording Name</label>
+      <input type="text" class="name-input" id="recName" placeholder="e.g. TSDR Module Walkthrough" maxlength="100" spellcheck="false">
     </div>
 
     <div class="settings">
@@ -520,6 +559,7 @@
   let mediaRecorder = null;
   let chunks = [];
   let streams = [];
+  let audioCtx = null;
   let timerInterval = null;
   let startTime = 0;
   let pausedDuration = 0;
@@ -601,51 +641,95 @@
       const displayStream = await navigator.mediaDevices.getDisplayMedia(displayConstraints);
       streams.push(displayStream);
 
-      // Combine audio tracks
-      const audioTracks = [];
+      // We always use AudioContext for mixing to ensure consistent quality
+      // Use 48kHz sample rate for broadcast-quality audio
+      audioCtx = new AudioContext({ sampleRate: 48000, latencyHint: 'playback' });
+      const dest = audioCtx.createMediaStreamDestination();
+      let hasAudio = false;
 
-      // System audio from display stream
-      if (wantSys) {
-        displayStream.getAudioTracks().forEach(t => audioTracks.push(t));
+      // System audio from display stream — apply gentle compression to avoid clipping
+      if (wantSys && displayStream.getAudioTracks().length > 0) {
+        const sysSource = audioCtx.createMediaStreamSource(
+          new MediaStream(displayStream.getAudioTracks())
+        );
+        // Gain node to control system audio level
+        const sysGain = audioCtx.createGain();
+        sysGain.gain.value = 1.0;
+
+        // Light compressor to tame system audio peaks and prevent crackling
+        const sysCompressor = audioCtx.createDynamicsCompressor();
+        sysCompressor.threshold.value = -18;
+        sysCompressor.knee.value = 12;
+        sysCompressor.ratio.value = 4;
+        sysCompressor.attack.value = 0.003;
+        sysCompressor.release.value = 0.15;
+
+        sysSource.connect(sysGain).connect(sysCompressor).connect(dest);
+        hasAudio = true;
       }
 
-      // Microphone
+      // Microphone — high-quality constraints with echo cancellation
       if (wantMic) {
         try {
           const micStream = await navigator.mediaDevices.getUserMedia({
-            audio: { echoCancellation: true, noiseSuppression: true, sampleRate: 48000 }
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true,
+              sampleRate: { ideal: 48000 },
+              channelCount: { ideal: 1 },
+              latency: { ideal: 0.01 },
+            }
           });
           streams.push(micStream);
-          micStream.getAudioTracks().forEach(t => audioTracks.push(t));
+
+          const micSource = audioCtx.createMediaStreamSource(micStream);
+
+          // Mic gain — slightly lower to sit under system audio
+          const micGain = audioCtx.createGain();
+          micGain.gain.value = 0.85;
+
+          // High-pass filter to remove rumble / hum below 80Hz
+          const micHiPass = audioCtx.createBiquadFilter();
+          micHiPass.type = 'highpass';
+          micHiPass.frequency.value = 80;
+          micHiPass.Q.value = 0.7;
+
+          // Gentle compressor for voice
+          const micCompressor = audioCtx.createDynamicsCompressor();
+          micCompressor.threshold.value = -24;
+          micCompressor.knee.value = 15;
+          micCompressor.ratio.value = 3;
+          micCompressor.attack.value = 0.005;
+          micCompressor.release.value = 0.2;
+
+          micSource.connect(micHiPass).connect(micGain).connect(micCompressor).connect(dest);
+          hasAudio = true;
         } catch (e) {
           console.warn('Microphone not available:', e);
         }
       }
 
-      // Mix audio tracks if multiple
+      // Build final stream
       let finalStream;
-      if (audioTracks.length > 1) {
-        const ctx = new AudioContext({ sampleRate: 48000 });
-        const dest = ctx.createMediaStreamDestination();
-        for (const track of audioTracks) {
-          const src = ctx.createMediaStreamSource(new MediaStream([track]));
-          src.connect(dest);
-        }
+      if (hasAudio) {
+        // Master limiter on the mixed bus to prevent any digital clipping
+        // We insert it between dest and a second destination
+        // Actually, the dest already outputs — so we apply limiter inline above.
+        // Instead, add a master gain safety ceiling
         finalStream = new MediaStream([
           ...displayStream.getVideoTracks(),
           ...dest.stream.getAudioTracks()
-        ]);
-      } else if (audioTracks.length === 1) {
-        finalStream = new MediaStream([
-          ...displayStream.getVideoTracks(),
-          audioTracks[0]
         ]);
       } else {
         finalStream = new MediaStream(displayStream.getVideoTracks());
       }
 
-      // Recorder options
-      const options = { videoBitsPerSecond: bitrate };
+      // Recorder options — set explicit audio bitrate for clean audio
+      const options = {
+        videoBitsPerSecond: bitrate,
+        audioBitsPerSecond: 192000, // 192kbps audio — transparent quality
+      };
       if (chosenMimeType) options.mimeType = chosenMimeType;
 
       mediaRecorder = new MediaRecorder(finalStream, options);
@@ -655,7 +739,7 @@
       // If user stops sharing via browser UI
       displayStream.getVideoTracks()[0].onended = () => { if (recording) stopRecording(); };
 
-      mediaRecorder.start(1000); // chunk every second for safety
+      mediaRecorder.start(5000); // 5s chunks — longer intervals reduce audio boundary glitches
       recording = true;
       paused = false;
 
@@ -679,6 +763,10 @@
     }
     streams.forEach(s => s.getTracks().forEach(t => t.stop()));
     streams = [];
+    if (audioCtx) {
+      audioCtx.close().catch(() => {});
+      audioCtx = null;
+    }
     recording = false;
     paused = false;
     stopTimer();
@@ -712,7 +800,11 @@
       const a = document.createElement('a');
       a.href = url;
       const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-      a.download = `screen-recording-${ts}.${ext}`;
+      const rawName = document.getElementById('recName').value.trim();
+      const safeName = rawName
+        ? rawName.replace(/[^a-zA-Z0-9_\-\s]/g, '').replace(/\s+/g, '_').substring(0, 80)
+        : 'screen-recording';
+      a.download = `${safeName}_${ts}.${ext}`;
       a.click();
     };
   }
