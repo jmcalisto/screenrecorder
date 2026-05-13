@@ -192,6 +192,48 @@
 
   .toggle input:checked ~ .toggle-knob { transform: translateX(18px); }
 
+  /* Mic level meter */
+  .mic-meter-wrap {
+    display: none;
+    margin-top: -8px;
+    margin-bottom: 4px;
+  }
+  .mic-meter-wrap.visible { display: block; }
+  .mic-meter-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--text-dim);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+  .mic-meter-track {
+    height: 6px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .mic-meter-fill {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, var(--green) 0%, var(--green) 60%, var(--amber) 80%, var(--accent) 100%);
+    transition: width 0.05s linear;
+  }
+
+  /* Locked settings during recording */
+  .settings.locked select,
+  .settings.locked .toggle,
+  .settings.locked .name-input {
+    opacity: 0.4;
+    pointer-events: none;
+    cursor: not-allowed;
+  }
+  .name-input-wrap.locked .name-input {
+    opacity: 0.4;
+    pointer-events: none;
+  }
+
   /* Divider */
   .divider {
     height: 1px;
@@ -502,6 +544,13 @@
         </label>
       </div>
 
+      <div class="mic-meter-wrap" id="micMeterWrap">
+        <div class="mic-meter-label">Mic Level</div>
+        <div class="mic-meter-track">
+          <div class="mic-meter-fill" id="micMeterFill"></div>
+        </div>
+      </div>
+
       <div class="setting-row">
         <span class="setting-label">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
@@ -557,6 +606,16 @@
   const preview = document.getElementById('preview');
   const previewWrap = document.getElementById('previewWrap');
   const warningBanner = document.getElementById('warningBanner');
+  const settingsEl = document.querySelector('.settings');
+  const nameWrapEl = document.querySelector('.name-input-wrap');
+  const recNameEl = document.getElementById('recName');
+  const resolutionEl = document.getElementById('resolution');
+  const framerateEl = document.getElementById('framerate');
+  const bitrateEl = document.getElementById('bitrate');
+  const micToggleEl = document.getElementById('micToggle');
+  const sysAudioToggleEl = document.getElementById('sysAudioToggle');
+  const micMeterWrap = document.getElementById('micMeterWrap');
+  const micMeterFill = document.getElementById('micMeterFill');
 
   let mediaRecorder = null;
   let chunks = [];
@@ -569,6 +628,114 @@
   let recording = false;
   let paused = false;
   let chosenMimeType = '';
+
+  // Mic preview (live level meter when mic toggle is on, independent of recording)
+  let micPreviewStream = null;
+  let micPreviewCtx = null;
+  let micPreviewAnalyser = null;
+  let micPreviewRAF = null;
+
+  // ---- Settings persistence ----
+  const SETTINGS_KEY = 'screenRecorderSettings.v1';
+  function saveSettings() {
+    try {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+        resolution: resolutionEl.value,
+        framerate: framerateEl.value,
+        bitrate: bitrateEl.value,
+        mic: micToggleEl.checked,
+        sys: sysAudioToggleEl.checked,
+        recName: recNameEl.value,
+      }));
+    } catch (e) { /* storage may be disabled */ }
+  }
+  function loadSettings() {
+    try {
+      const s = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
+      if (s.resolution) resolutionEl.value = s.resolution;
+      if (s.framerate) framerateEl.value = s.framerate;
+      if (s.bitrate) bitrateEl.value = s.bitrate;
+      if (typeof s.mic === 'boolean') micToggleEl.checked = s.mic;
+      if (typeof s.sys === 'boolean') sysAudioToggleEl.checked = s.sys;
+      if (typeof s.recName === 'string') recNameEl.value = s.recName;
+    } catch (e) { /* ignore */ }
+  }
+  loadSettings();
+  [resolutionEl, framerateEl, bitrateEl, micToggleEl, sysAudioToggleEl].forEach(el =>
+    el.addEventListener('change', saveSettings)
+  );
+  recNameEl.addEventListener('input', saveSettings);
+
+  // ---- Mic preview meter ----
+  async function startMicPreview() {
+    if (micPreviewStream) return;
+    try {
+      micPreviewStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: false,
+        }
+      });
+      micPreviewCtx = new AudioContext();
+      if (micPreviewCtx.state === 'suspended') {
+        try { await micPreviewCtx.resume(); } catch (e) {}
+      }
+      const src = micPreviewCtx.createMediaStreamSource(micPreviewStream);
+      micPreviewAnalyser = micPreviewCtx.createAnalyser();
+      micPreviewAnalyser.fftSize = 1024;
+      micPreviewAnalyser.smoothingTimeConstant = 0.3;
+      src.connect(micPreviewAnalyser);
+      micMeterWrap.classList.add('visible');
+      drawMicMeter();
+    } catch (e) {
+      console.warn('Mic preview unavailable:', e);
+      // Revert toggle: we couldn't get the mic
+      micToggleEl.checked = false;
+      saveSettings();
+    }
+  }
+  function drawMicMeter() {
+    if (!micPreviewAnalyser) return;
+    const buf = new Float32Array(micPreviewAnalyser.fftSize);
+    micPreviewAnalyser.getFloatTimeDomainData(buf);
+    let sum = 0;
+    for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+    const rms = Math.sqrt(sum / buf.length);
+    const db = 20 * Math.log10(rms || 1e-8);
+    // Map -60dB..0dB → 0..100%
+    const pct = Math.max(0, Math.min(100, ((db + 60) / 60) * 100));
+    micMeterFill.style.width = pct + '%';
+    micPreviewRAF = requestAnimationFrame(drawMicMeter);
+  }
+  function stopMicPreview() {
+    if (micPreviewRAF) cancelAnimationFrame(micPreviewRAF);
+    micPreviewRAF = null;
+    if (micPreviewStream) {
+      micPreviewStream.getTracks().forEach(t => t.stop());
+      micPreviewStream = null;
+    }
+    if (micPreviewCtx) {
+      micPreviewCtx.close().catch(() => {});
+      micPreviewCtx = null;
+    }
+    micPreviewAnalyser = null;
+    micMeterWrap.classList.remove('visible');
+    micMeterFill.style.width = '0%';
+  }
+  micToggleEl.addEventListener('change', () => {
+    if (micToggleEl.checked) startMicPreview();
+    else stopMicPreview();
+  });
+
+  // ---- beforeunload guard ----
+  window.addEventListener('beforeunload', e => {
+    if (recording) {
+      e.preventDefault();
+      e.returnValue = '';
+      return '';
+    }
+  });
 
   // Determine best MIME type — prefer MP4/H.264 (Chrome 130+ supports this)
   function getBestMime() {
@@ -649,6 +816,18 @@
       const dest = audioCtx.createMediaStreamDestination();
       let hasAudio = false;
 
+      // Master mix bus → brickwall limiter → recording destination.
+      // Every source flows through the limiter so the summed signal can never clip.
+      const mixBus = audioCtx.createGain();
+      mixBus.gain.value = 1.0;
+      const masterLimiter = audioCtx.createDynamicsCompressor();
+      masterLimiter.threshold.value = -1;
+      masterLimiter.knee.value = 0;
+      masterLimiter.ratio.value = 20;
+      masterLimiter.attack.value = 0.001;
+      masterLimiter.release.value = 0.05;
+      mixBus.connect(masterLimiter).connect(dest);
+
       // System audio from display stream — apply gentle compression to avoid clipping
       if (wantSys && displayStream.getAudioTracks().length > 0) {
         const sysSource = audioCtx.createMediaStreamSource(
@@ -666,18 +845,19 @@
         sysCompressor.attack.value = 0.003;
         sysCompressor.release.value = 0.15;
 
-        sysSource.connect(sysGain).connect(sysCompressor).connect(dest);
+        sysSource.connect(sysGain).connect(sysCompressor).connect(mixBus);
         hasAudio = true;
       }
 
-      // Microphone — high-quality constraints with echo cancellation
+      // Microphone — high-quality constraints with echo cancellation.
+      // AGC is disabled: it fights the downstream compressor and causes pumping.
       if (wantMic) {
         try {
           const micStream = await navigator.mediaDevices.getUserMedia({
             audio: {
               echoCancellation: true,
               noiseSuppression: true,
-              autoGainControl: true,
+              autoGainControl: false,
               sampleRate: { ideal: 48000 },
               channelCount: { ideal: 1 },
               latency: { ideal: 0.01 },
@@ -705,7 +885,7 @@
           micCompressor.attack.value = 0.005;
           micCompressor.release.value = 0.2;
 
-          micSource.connect(micHiPass).connect(micGain).connect(micCompressor).connect(dest);
+          micSource.connect(micHiPass).connect(micGain).connect(micCompressor).connect(mixBus);
           hasAudio = true;
         } catch (e) {
           console.warn('Microphone not available:', e);
@@ -715,10 +895,6 @@
       // Build final stream
       let finalStream;
       if (hasAudio) {
-        // Master limiter on the mixed bus to prevent any digital clipping
-        // We insert it between dest and a second destination
-        // Actually, the dest already outputs — so we apply limiter inline above.
-        // Instead, add a master gain safety ceiling
         finalStream = new MediaStream([
           ...displayStream.getVideoTracks(),
           ...dest.stream.getAudioTracks()
@@ -750,6 +926,8 @@
       statusText.classList.add('recording');
       pauseBtn.classList.add('visible');
       downloadArea.classList.remove('visible');
+      settingsEl.classList.add('locked');
+      nameWrapEl.classList.add('locked');
       startTimer();
 
     } catch (e) {
@@ -768,6 +946,8 @@
     stopTimer();
     recBtn.classList.remove('recording');
     pauseBtn.classList.remove('visible');
+    settingsEl.classList.remove('locked');
+    nameWrapEl.classList.remove('locked');
     statusText.textContent = 'Processing...';
     statusText.classList.remove('recording');
   }
