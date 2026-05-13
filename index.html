@@ -761,12 +761,6 @@
     if (mediaRecorder && mediaRecorder.state !== 'inactive') {
       mediaRecorder.stop();
     }
-    streams.forEach(s => s.getTracks().forEach(t => t.stop()));
-    streams = [];
-    if (audioCtx) {
-      audioCtx.close().catch(() => {});
-      audioCtx = null;
-    }
     recording = false;
     paused = false;
     stopTimer();
@@ -807,6 +801,13 @@
       a.download = `${safeName}_${ts}.${ext}`;
       a.click();
     };
+
+    streams.forEach(s => s.getTracks().forEach(t => t.stop()));
+    streams = [];
+    if (audioCtx) {
+      audioCtx.close().catch(() => {});
+      audioCtx = null;
+    }
   }
 
   // Toggle pause
