@@ -192,6 +192,29 @@
 
   .toggle input:checked ~ .toggle-knob { transform: translateX(18px); }
 
+  /* Mic device picker */
+  .mic-device-wrap {
+    display: none;
+    margin-top: -6px;
+    margin-bottom: 4px;
+  }
+  .mic-device-wrap.visible { display: block; }
+  .mic-device-select {
+    width: 100%;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    padding: 8px 12px;
+    cursor: pointer;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  .mic-device-select:hover { border-color: var(--text-dim); }
+  .mic-device-select:focus { border-color: var(--blue); }
+
   /* Mic level meter */
   .mic-meter-wrap {
     display: none;
@@ -316,6 +339,15 @@
   }
 
   .timer.visible { display: block; }
+
+  .live-size {
+    display: none;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--text-dim);
+    letter-spacing: 1px;
+  }
+  .live-size.visible { display: inline; }
 
   /* Pause button */
   .pause-btn {
@@ -462,6 +494,50 @@
     border-color: var(--blue);
     box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
   }
+  .name-input.invalid {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(255, 59, 59, 0.15);
+    animation: shake 0.3s ease-in-out;
+  }
+  @keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    25% { transform: translateX(-4px); }
+    75% { transform: translateX(4px); }
+  }
+
+  /* Countdown overlay */
+  .countdown-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(10, 10, 15, 0.92);
+    backdrop-filter: blur(8px);
+    z-index: 100;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 20px;
+  }
+  .countdown-overlay.visible { display: flex; }
+  .countdown-number {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 200px;
+    font-weight: 700;
+    color: var(--accent);
+    line-height: 1;
+    text-shadow: 0 0 60px var(--accent-glow);
+    animation: countdown-pop 0.8s ease-out;
+  }
+  @keyframes countdown-pop {
+    0% { transform: scale(0.6); opacity: 0; }
+    30% { transform: scale(1.1); opacity: 1; }
+    100% { transform: scale(1); opacity: 1; }
+  }
+  .countdown-hint {
+    font-size: 16px;
+    color: var(--text-dim);
+    font-weight: 400;
+  }
 </style>
 </head>
 <body>
@@ -482,8 +558,8 @@
     </div>
 
     <div class="name-input-wrap">
-      <label class="name-input-label" for="recName">Recording Name</label>
-      <input type="text" class="name-input" id="recName" placeholder="e.g. TSDR Module Walkthrough" maxlength="100" spellcheck="false">
+      <label class="name-input-label" for="recName">Recording Name *</label>
+      <input type="text" class="name-input" id="recName" placeholder="e.g. TSDR Module Walkthrough" maxlength="100" spellcheck="false" required>
     </div>
 
     <div class="settings">
@@ -509,8 +585,8 @@
         </span>
         <div class="setting-value">
           <select id="framerate">
-            <option value="30">30 fps</option>
-            <option value="60" selected>60 fps</option>
+            <option value="30" selected>30 fps (Recommended)</option>
+            <option value="60">60 fps (Smooth motion)</option>
           </select>
         </div>
       </div>
@@ -523,8 +599,8 @@
         <div class="setting-value">
           <select id="bitrate">
             <option value="8000000">8 Mbps (Good)</option>
-            <option value="16000000" selected>16 Mbps (High)</option>
-            <option value="30000000">30 Mbps (Ultra)</option>
+            <option value="16000000">16 Mbps (High)</option>
+            <option value="30000000" selected>30 Mbps (Recommended)</option>
             <option value="50000000">50 Mbps (Max)</option>
           </select>
         </div>
@@ -542,6 +618,12 @@
           <div class="toggle-track"></div>
           <div class="toggle-knob"></div>
         </label>
+      </div>
+
+      <div class="mic-device-wrap" id="micDeviceWrap">
+        <select id="micDevice" class="mic-device-select">
+          <option value="">Default microphone</option>
+        </select>
       </div>
 
       <div class="mic-meter-wrap" id="micMeterWrap">
@@ -562,6 +644,18 @@
           <div class="toggle-knob"></div>
         </label>
       </div>
+
+      <div class="setting-row">
+        <span class="setting-label" title="Enables echo cancellation. Turn off if you're using speakers — it will damage system audio quality.">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1v-7h3z M3 19a2 2 0 0 0 2 2h1v-7H3z"/></svg>
+          Using Headphones
+        </span>
+        <label class="toggle">
+          <input type="checkbox" id="headphonesToggle" checked>
+          <div class="toggle-track"></div>
+          <div class="toggle-knob"></div>
+        </label>
+      </div>
     </div>
 
     <div class="rec-btn-wrap">
@@ -573,6 +667,7 @@
     <div class="status-bar">
       <span class="status-text" id="statusText">Ready to record</span>
       <span class="timer" id="timer">00:00:00</span>
+      <span class="live-size" id="liveSize"></span>
       <button class="pause-btn" id="pauseBtn">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
         Pause
@@ -592,6 +687,11 @@
   </div>
 
   <p class="footer">Recordings stay local — nothing is uploaded. Works best in Chrome / Edge.</p>
+</div>
+
+<div class="countdown-overlay" id="countdownOverlay">
+  <div class="countdown-number" id="countdownNumber">3</div>
+  <div class="countdown-hint">Switch to the screen you want to record</div>
 </div>
 
 <script>
@@ -614,8 +714,14 @@
   const bitrateEl = document.getElementById('bitrate');
   const micToggleEl = document.getElementById('micToggle');
   const sysAudioToggleEl = document.getElementById('sysAudioToggle');
+  const headphonesToggleEl = document.getElementById('headphonesToggle');
+  const micDeviceEl = document.getElementById('micDevice');
+  const micDeviceWrap = document.getElementById('micDeviceWrap');
   const micMeterWrap = document.getElementById('micMeterWrap');
   const micMeterFill = document.getElementById('micMeterFill');
+  const liveSizeEl = document.getElementById('liveSize');
+  const countdownOverlay = document.getElementById('countdownOverlay');
+  const countdownNumber = document.getElementById('countdownNumber');
 
   let mediaRecorder = null;
   let chunks = [];
@@ -628,6 +734,9 @@
   let recording = false;
   let paused = false;
   let chosenMimeType = '';
+  let fileHandle = null;
+  let fileWritable = null;
+  let totalBytes = 0;
 
   // Mic preview (live level meter when mic toggle is on, independent of recording)
   let micPreviewStream = null;
@@ -645,6 +754,8 @@
         bitrate: bitrateEl.value,
         mic: micToggleEl.checked,
         sys: sysAudioToggleEl.checked,
+        headphones: headphonesToggleEl.checked,
+        micDeviceId: micDeviceEl.value,
         recName: recNameEl.value,
       }));
     } catch (e) { /* storage may be disabled */ }
@@ -653,30 +764,85 @@
     try {
       const s = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
       if (s.resolution) resolutionEl.value = s.resolution;
-      if (s.framerate) framerateEl.value = s.framerate;
-      if (s.bitrate) bitrateEl.value = s.bitrate;
+      // Migrate: old default (60 fps) gets bumped down to new default (30 fps).
+      if (s.framerate && s.framerate !== '60') framerateEl.value = s.framerate;
+      // Migrate: old default (16 Mbps) gets bumped to new default (30 Mbps).
+      if (s.bitrate && s.bitrate !== '16000000') bitrateEl.value = s.bitrate;
       if (typeof s.mic === 'boolean') micToggleEl.checked = s.mic;
       if (typeof s.sys === 'boolean') sysAudioToggleEl.checked = s.sys;
+      if (typeof s.headphones === 'boolean') headphonesToggleEl.checked = s.headphones;
+      // Mic device id is restored after enumerateDevices populates the list.
       if (typeof s.recName === 'string') recNameEl.value = s.recName;
     } catch (e) { /* ignore */ }
   }
   loadSettings();
-  [resolutionEl, framerateEl, bitrateEl, micToggleEl, sysAudioToggleEl].forEach(el =>
+  [resolutionEl, framerateEl, bitrateEl, micToggleEl, sysAudioToggleEl, headphonesToggleEl, micDeviceEl].forEach(el =>
     el.addEventListener('change', saveSettings)
   );
-  recNameEl.addEventListener('input', saveSettings);
+  recNameEl.addEventListener('input', () => {
+    recNameEl.classList.remove('invalid');
+    saveSettings();
+  });
+
+  // ---- Mic device enumeration ----
+  function buildMicConstraints() {
+    const audio = {
+      // Echo cancellation is only needed when audio bleeds from speakers into mic.
+      // Headphones → no bleed → EC off for cleaner voice.
+      echoCancellation: !headphonesToggleEl.checked,
+      noiseSuppression: true,
+      autoGainControl: false,
+      sampleRate: { ideal: 48000 },
+      channelCount: { ideal: 1 },
+      latency: { ideal: 0.01 },
+    };
+    if (micDeviceEl.value) audio.deviceId = { exact: micDeviceEl.value };
+    return audio;
+  }
+
+  async function populateMicDevices() {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const mics = devices.filter(d =>
+        d.kind === 'audioinput' &&
+        d.deviceId &&
+        d.deviceId !== 'default' &&
+        d.deviceId !== 'communications'
+      );
+      if (mics.length === 0) return;
+
+      // Restore saved selection if the device is still present.
+      let saved = micDeviceEl.value;
+      if (!saved) {
+        try { saved = (JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}').micDeviceId) || ''; }
+        catch { saved = ''; }
+      }
+
+      micDeviceEl.innerHTML =
+        '<option value="">Default microphone</option>' +
+        mics.map(d => {
+          const label = d.label || 'Microphone';
+          return `<option value="${d.deviceId}">${label.replace(/</g, '&lt;')}</option>`;
+        }).join('');
+
+      if (saved && mics.find(m => m.deviceId === saved)) {
+        micDeviceEl.value = saved;
+      }
+      micDeviceWrap.classList.toggle('visible', micToggleEl.checked);
+    } catch (e) { /* enumerate may fail without permission */ }
+  }
+  populateMicDevices();
+  navigator.mediaDevices.addEventListener?.('devicechange', populateMicDevices);
 
   // ---- Mic preview meter ----
   async function startMicPreview() {
     if (micPreviewStream) return;
     try {
       micPreviewStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: false,
-        }
+        audio: buildMicConstraints()
       });
+      // Permission is now granted — re-enumerate so device labels are visible.
+      populateMicDevices();
       micPreviewCtx = new AudioContext();
       if (micPreviewCtx.state === 'suspended') {
         try { await micPreviewCtx.resume(); } catch (e) {}
@@ -723,10 +889,30 @@
     micMeterWrap.classList.remove('visible');
     micMeterFill.style.width = '0%';
   }
+  async function restartMicPreview() {
+    if (!micToggleEl.checked) return;
+    stopMicPreview();
+    await startMicPreview();
+  }
   micToggleEl.addEventListener('change', () => {
+    micDeviceWrap.classList.toggle('visible', micToggleEl.checked);
     if (micToggleEl.checked) startMicPreview();
     else stopMicPreview();
   });
+  micDeviceEl.addEventListener('change', restartMicPreview);
+  headphonesToggleEl.addEventListener('change', restartMicPreview);
+
+  // Auto-activate the meter on the user's first interaction with the page.
+  // Avoids requesting mic permission the instant the page loads while still
+  // showing the meter without forcing the user to toggle off and on.
+  function lazyStartMicPreview() {
+    if (micToggleEl.checked) {
+      micDeviceWrap.classList.add('visible');
+      startMicPreview();
+    }
+  }
+  window.addEventListener('pointerdown', lazyStartMicPreview, { once: true });
+  window.addEventListener('keydown', lazyStartMicPreview, { once: true });
 
   // ---- beforeunload guard ----
   window.addEventListener('beforeunload', e => {
@@ -789,11 +975,78 @@
   function formatBytes(b) {
     if (b < 1024) return b + ' B';
     if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
-    return (b / 1048576).toFixed(1) + ' MB';
+    if (b < 1073741824) return (b / 1048576).toFixed(1) + ' MB';
+    return (b / 1073741824).toFixed(2) + ' GB';
+  }
+
+  // Strip Windows-illegal chars and control chars only — keep Unicode letters,
+  // accents, apostrophes, dashes, etc. for international training material.
+  function sanitizeFilename(name) {
+    const cleaned = name
+      .replace(/[<>:"/\\|?*\x00-\x1F]/g, '')
+      .replace(/^[\s.]+|[\s.]+$/g, '')
+      .substring(0, 100);
+    return cleaned || 'screen-recording';
+  }
+  function nowStamp() {
+    return new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  }
+
+  async function runCountdown() {
+    countdownOverlay.classList.add('visible');
+    for (let i = 3; i > 0; i--) {
+      countdownNumber.textContent = i;
+      // Force reflow so the CSS pop animation re-triggers each tick.
+      countdownNumber.style.animation = 'none';
+      void countdownNumber.offsetWidth;
+      countdownNumber.style.animation = '';
+      await new Promise(r => setTimeout(r, 800));
+    }
+    countdownOverlay.classList.remove('visible');
   }
 
   async function startRecording() {
+    if (!recNameEl.value.trim()) {
+      recNameEl.classList.add('invalid');
+      recNameEl.focus();
+      statusText.textContent = 'Please enter a recording name';
+      setTimeout(() => {
+        if (!recording) statusText.textContent = 'Ready to record';
+      }, 2500);
+      return;
+    }
     chunks = [];
+    fileHandle = null;
+    fileWritable = null;
+    totalBytes = 0;
+
+    // Stream output to disk when File System Access API is available
+    // (Chrome/Edge). Keeps memory flat regardless of recording length —
+    // critical for long live demos that would otherwise OOM the tab.
+    if ('showSaveFilePicker' in window) {
+      const ext = chosenMimeType.startsWith('video/mp4') ? 'mp4' : 'webm';
+      const suggestedName = `${sanitizeFilename(recNameEl.value.trim())}_${nowStamp()}.${ext}`;
+      try {
+        fileHandle = await window.showSaveFilePicker({
+          suggestedName,
+          types: [{
+            description: `${ext.toUpperCase()} video`,
+            accept: { [`video/${ext}`]: [`.${ext}`] }
+          }]
+        });
+        fileWritable = await fileHandle.createWritable();
+      } catch (e) {
+        if (e.name === 'AbortError') {
+          statusText.textContent = 'Cancelled';
+          setTimeout(() => { statusText.textContent = 'Ready to record'; }, 1500);
+          return;
+        }
+        console.warn('Falling back to in-memory recording:', e);
+        fileHandle = null;
+        fileWritable = null;
+      }
+    }
+
     const resVal = document.getElementById('resolution').value;
     const fps = parseInt(document.getElementById('framerate').value);
     const bitrate = parseInt(document.getElementById('bitrate').value);
@@ -849,19 +1102,12 @@
         hasAudio = true;
       }
 
-      // Microphone — high-quality constraints with echo cancellation.
-      // AGC is disabled: it fights the downstream compressor and causes pumping.
+      // Microphone — uses the selected device and echo-cancellation choice from the UI.
+      // AGC is always disabled: it fights the downstream compressor and causes pumping.
       if (wantMic) {
         try {
           const micStream = await navigator.mediaDevices.getUserMedia({
-            audio: {
-              echoCancellation: true,
-              noiseSuppression: true,
-              autoGainControl: false,
-              sampleRate: { ideal: 48000 },
-              channelCount: { ideal: 1 },
-              latency: { ideal: 0.01 },
-            }
+            audio: buildMicConstraints()
           });
           streams.push(micStream);
 
@@ -911,11 +1157,30 @@
       if (chosenMimeType) options.mimeType = chosenMimeType;
 
       mediaRecorder = new MediaRecorder(finalStream, options);
-      mediaRecorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+      mediaRecorder.ondataavailable = async e => {
+        if (e.data.size === 0) return;
+        totalBytes += e.data.size;
+        liveSizeEl.textContent = '· ' + formatBytes(totalBytes);
+        liveSizeEl.classList.add('visible');
+        if (fileWritable) {
+          try {
+            await fileWritable.write(e.data);
+          } catch (err) {
+            console.error('Failed to write chunk to disk:', err);
+          }
+        } else {
+          chunks.push(e.data);
+        }
+      };
       mediaRecorder.onstop = onRecordingStopped;
 
       // If user stops sharing via browser UI
       displayStream.getVideoTracks()[0].onended = () => { if (recording) stopRecording(); };
+
+      // Countdown gives the presenter time to switch to the screen they're recording.
+      // Streams are already live; only the actual capture is delayed.
+      downloadArea.classList.remove('visible');
+      await runCountdown();
 
       mediaRecorder.start(5000); // 5s chunks — longer intervals reduce audio boundary glitches
       recording = true;
@@ -925,7 +1190,6 @@
       statusText.textContent = 'Recording';
       statusText.classList.add('recording');
       pauseBtn.classList.add('visible');
-      downloadArea.classList.remove('visible');
       settingsEl.classList.add('locked');
       nameWrapEl.classList.add('locked');
       startTimer();
@@ -934,6 +1198,12 @@
       console.error('Failed to start recording:', e);
       statusText.textContent = 'Cancelled or denied';
       setTimeout(() => { statusText.textContent = 'Ready to record'; }, 2000);
+      // Clean up the placeholder file we may have opened.
+      if (fileWritable) {
+        try { await fileWritable.close(); } catch (_) {}
+        fileWritable = null;
+        fileHandle = null;
+      }
     }
   }
 
@@ -952,37 +1222,58 @@
     statusText.classList.remove('recording');
   }
 
-  function onRecordingStopped() {
+  async function onRecordingStopped() {
     const isMP4 = chosenMimeType.startsWith('video/mp4');
     const ext = isMP4 ? 'mp4' : 'webm';
     const mimeForBlob = isMP4 ? 'video/mp4' : 'video/webm';
-    const blob = new Blob(chunks, { type: mimeForBlob });
-    const url = URL.createObjectURL(blob);
+
+    let fileObj = null;
+    let savedToDisk = false;
+
+    if (fileWritable) {
+      try {
+        await fileWritable.close();
+        fileObj = await fileHandle.getFile();
+        savedToDisk = true;
+      } catch (e) {
+        console.error('Failed to finalize file on disk:', e);
+        statusText.textContent = 'Save failed';
+        return;
+      }
+    } else {
+      fileObj = new Blob(chunks, { type: mimeForBlob });
+    }
+
+    // URL.createObjectURL on a File handle streams from disk — preview works
+    // without loading the whole recording into memory.
+    const url = URL.createObjectURL(fileObj);
 
     const elapsed = Date.now() - startTime - pausedDuration;
     const duration = formatTime(elapsed);
-    const size = formatBytes(blob.size);
+    const size = formatBytes(fileObj.size);
 
-    // Preview
     preview.src = url;
     previewWrap.classList.add('visible');
     downloadArea.classList.add('visible');
-    downloadMeta.innerHTML = `${ext.toUpperCase()} · ${size} · ${duration} · ${chosenMimeType.split(';')[0]}`;
 
-    statusText.textContent = 'Recording saved';
+    if (savedToDisk) {
+      downloadMeta.innerHTML = `Saved as <strong>${(fileObj.name || '').replace(/</g, '&lt;')}</strong> · ${size} · ${duration}`;
+      downloadBtn.style.display = 'none';
+      statusText.textContent = 'Recording saved to disk';
+    } else {
+      downloadMeta.innerHTML = `${ext.toUpperCase()} · ${size} · ${duration} · ${chosenMimeType.split(';')[0]}`;
+      downloadBtn.style.display = '';
+      downloadBtn.onclick = () => {
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${sanitizeFilename(recNameEl.value.trim())}_${nowStamp()}.${ext}`;
+        a.click();
+      };
+      statusText.textContent = 'Recording ready to download';
+    }
 
-    // Download handler
-    downloadBtn.onclick = () => {
-      const a = document.createElement('a');
-      a.href = url;
-      const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-      const rawName = document.getElementById('recName').value.trim();
-      const safeName = rawName
-        ? rawName.replace(/[^a-zA-Z0-9_\-\s]/g, '').replace(/\s+/g, '_').substring(0, 80)
-        : 'screen-recording';
-      a.download = `${safeName}_${ts}.${ext}`;
-      a.click();
-    };
+    liveSizeEl.classList.remove('visible');
+    liveSizeEl.textContent = '';
 
     streams.forEach(s => s.getTracks().forEach(t => t.stop()));
     streams = [];
@@ -990,6 +1281,8 @@
       audioCtx.close().catch(() => {});
       audioCtx = null;
     }
+    fileHandle = null;
+    fileWritable = null;
   }
 
   // Toggle pause
